@@ -1,0 +1,503 @@
+diff --git a/arch/x86/include/uapi/asm/vmx.h b/arch/x86/include/uapi/asm/vmx.h
+index 5b15d94..6087f67 100644
+--- a/arch/x86/include/uapi/asm/vmx.h
++++ b/arch/x86/include/uapi/asm/vmx.h
+@@ -80,6 +80,12 @@
+ #define EXIT_REASON_XRSTORS             64
+ #define EXIT_REASON_PCOMMIT             65
+ 
++//Venkatesh Ramanujam Rangarajan
++//#define required for the assignment
++#define MAX_CPU_CORES 					64
++#define MAX_EXIT_INDEX					66
++//Venkatesh Ramanujam Rangarajan
++
+ #define VMX_EXIT_REASONS \
+ 	{ EXIT_REASON_EXCEPTION_NMI,         "EXCEPTION_NMI" }, \
+ 	{ EXIT_REASON_EXTERNAL_INTERRUPT,    "EXTERNAL_INTERRUPT" }, \
+@@ -130,6 +136,26 @@
+ 	{ EXIT_REASON_XRSTORS,               "XRSTORS" }, \
+ 	{ EXIT_REASON_PCOMMIT,               "PCOMMIT" }
+ 
++
++//Venkatesh Ramanujam 
++//This is the Datastructure where Assignment data is stored 
++typedef struct CPU_DATA
++{
++	long long exit_count[MAX_EXIT_INDEX];
++	long long cyles_consumed_by_exit[MAX_EXIT_INDEX];
++	long long events_injected;
++}CPU_DATA;
++
++typedef struct ASSIGNMENT_DATA
++{
++	CPU_DATA cpu_data[MAX_CPU_CORES];
++	char *exit_names[MAX_EXIT_INDEX];
++	long long module_start_time;
++	long long current_time;
++}ASSIGNMENT_DATA;
++//Venkatesh Ramanujam 
++
++ 
+ #define VMX_ABORT_SAVE_GUEST_MSR_FAIL        1
+ #define VMX_ABORT_LOAD_HOST_MSR_FAIL         4
+ 
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 9bd8f44..9817c8f 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -59,6 +59,13 @@
+ MODULE_AUTHOR("Qumranet");
+ MODULE_LICENSE("GPL");
+ 
++
++//venkatesh Ramanujam
++//Variable definitions
++ASSIGNMENT_DATA assignment_data;
++DEFINE_SPINLOCK(sync_lock);
++//venkatesh Ramanujam
++
+ static const struct x86_cpu_id vmx_cpu_id[] = {
+ 	X86_FEATURE_MATCH(X86_FEATURE_VMX),
+ 	{}
+@@ -518,6 +525,183 @@ static inline int pi_test_sn(struct pi_desc *pi_desc)
+ 			(unsigned long *)&pi_desc->control);
+ }
+ 
++//cmpe283 bonus lab
++static void incrementEventInjected(int cpuid)
++{
++	spin_lock(&sync_lock);
++	assignment_data.cpu_data[cpuid].events_injected++;
++	spin_unlock(&sync_lock);
++}
++
++static int case1print(struct seq_file *m, void *v)
++{
++	int i = 0, j = 0;
++	long long sum = 0;
++	//spin_lock(&sync_lock);
++	seq_printf(m,"\r\ncase 1: Total number of exits for a particular exit type\r\n");
++	
++	for(i = 0; i < MAX_EXIT_INDEX;i++)
++	{
++		if(assignment_data.exit_names[i] != NULL)
++		{
++			seq_printf(m,"%s: ",assignment_data.exit_names[i]);
++			sum = 0;
++			for(j = 0;j < MAX_CPU_CORES;j++)
++			{
++				sum += assignment_data.cpu_data[j].exit_count[i];
++			}
++			seq_printf(m,"%lld\r\n",sum);
++		}
++	}
++	//spin_unlock(&sync_lock);
++	return 0;
++}
++static int case2print(struct seq_file *m, void *v)
++{
++	int j = 0;
++//	spin_lock(&sync_lock);
++	printk("\r\ncase 2: Total events injected per cpu\r\n");
++	for(j = 0;j < MAX_CPU_CORES;j++)
++	{
++		if(assignment_data.cpu_data[j].events_injected > 0)
++			seq_printf(m,"\r\nCPU:%d EventsInjected:%lld\r\n",j,assignment_data.cpu_data[j].events_injected);
++	}
++//	spin_unlock(&sync_lock);
++	return 0;
++}
++static int case3print(struct seq_file *m, void *v)
++{
++	int i = 0, j = 0;
++	long long timediff = -1;
++//	spin_lock(&sync_lock);
++	seq_printf(m,"\r\ncase 3: Average number of exits persec per cpu\r\n");
++	for(i = 0; i < MAX_EXIT_INDEX;i++)
++	{
++		if(assignment_data.exit_names[i] != NULL)
++		{
++			seq_printf(m,"%s ==> ",assignment_data.exit_names[i]);
++			assignment_data.current_time = ktime_to_ms(ktime_get())/1000;
++			timediff = assignment_data.current_time - assignment_data.module_start_time; 
++			
++			for(j = 0;j < MAX_CPU_CORES;j++)
++			{
++				if(assignment_data.cpu_data[j].exit_count[i] > 0)
++					seq_printf(m,"CPU%d:%lld ",j,(assignment_data.cpu_data[j].exit_count[i]/timediff));
++				//else
++				//	printk(" This exit type wasn't handled by any CPU\r\n");
++			}
++			seq_printf(m,"\r\n");
++		}
++	}
++//	spin_unlock(&sync_lock);
++	return 0;
++}
++static int case4print(struct seq_file *m, void *v)
++{
++	int i = 0, j = 0;
++	seq_printf(m,"\r\ncase 4: Average Latency Per CPU Per Exit Type\r\n");
++	for(i = 0; i < MAX_EXIT_INDEX;i++)
++	{
++		if(assignment_data.exit_names[i] != NULL)
++		{
++			seq_printf(m,"%s ==> ",assignment_data.exit_names[i]);			
++			for(j = 0;j < MAX_CPU_CORES;j++)
++			{
++				if(assignment_data.cpu_data[j].exit_count[i] > 0)
++					seq_printf(m,"CPU%d:%lld ",j,(assignment_data.cpu_data[j].cyles_consumed_by_exit[i]/assignment_data.cpu_data[j].exit_count[i]));
++				//else
++				//	printk(" This exit type wasn't handled by any CPU\r\n");
++			}
++			seq_printf(m,"\r\n");
++		}
++	}
++	return 0;
++}
++static int case1open(struct inode *inode, struct file *file)
++{
++	return single_open(file, case1print, NULL);
++}
++static int case2open(struct inode *inode, struct file *file)
++{
++	return single_open(file, case2print, NULL);
++}
++static int case3open(struct inode *inode, struct file *file)
++{
++	return single_open(file, case3print, NULL);
++}
++static int case4open(struct inode *inode, struct file *file)
++{
++	return single_open(file, case4print, NULL);
++}
++static const struct file_operations case1ops = {
++    .owner	= THIS_MODULE,
++    .open	= case1open,
++    .read	= seq_read,
++    .llseek	= seq_lseek,
++    .release	= single_release,
++};
++
++static const struct file_operations case2ops = {
++    .owner	= THIS_MODULE,
++    .open	= case2open,
++    .read	= seq_read,
++    .llseek	= seq_lseek,
++    .release	= single_release,
++};
++
++static const struct file_operations case3ops = {
++    .owner	= THIS_MODULE,
++    .open	= case3open,
++    .read	= seq_read,
++    .llseek	= seq_lseek,
++    .release	= single_release,
++};
++
++static const struct file_operations case4ops = {
++    .owner	= THIS_MODULE,
++    .open	= case4open,
++    .read	= seq_read,
++    .llseek	= seq_lseek,
++    .release	= single_release,
++};
++
++static struct proc_dir_entry* case1;
++static struct proc_dir_entry* case2;
++static struct proc_dir_entry* case3;
++static struct proc_dir_entry* case4;
++
++
++static int assignmentprocinit(void);
++static int assignmentprocinit(void)
++{
++     case1 = proc_create("case1", 0, NULL, &case1ops);
++	  	
++     if (!case1) {
++         return -ENOMEM;
++     }
++
++	 case2 = proc_create("case2", 0, NULL, &case2ops);
++	  	
++     if (!case1) {
++         return -ENOMEM;
++     }
++
++	 case3 = proc_create("case3", 0, NULL, &case3ops);
++	  	
++     if (!case1) {
++         return -ENOMEM;
++     }
++
++	 case4 = proc_create("case4", 0, NULL, &case4ops);
++	  	
++     if (!case1) {
++         return -ENOMEM;
++     }
++
++    return 0;
++}
++//cmpe283 bonus lab
++
+ struct vcpu_vmx {
+ 	struct kvm_vcpu       vcpu;
+ 	unsigned long         host_rsp;
+@@ -2365,7 +2549,11 @@ static void vmx_queue_exception(struct kvm_vcpu *vcpu, unsigned nr,
+ 		intr_info |= INTR_TYPE_SOFT_EXCEPTION;
+ 	} else
+ 		intr_info |= INTR_TYPE_HARD_EXCEPTION;
+-
++		
++	//cmpe283 bonus lab	
++	incrementEventInjected(vcpu->vcpu_id);
++	//cmpe283 bonus lab 
++	
+ 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr_info);
+ }
+ 
+@@ -5098,7 +5286,11 @@ static void vmx_inject_irq(struct kvm_vcpu *vcpu)
+ 			     vmx->vcpu.arch.event_exit_inst_len);
+ 	} else
+ 		intr |= INTR_TYPE_EXT_INTR;
++	//cmpe283 bonus lab	
++	incrementEventInjected(vcpu->vcpu_id);
++	//cmpe283 bonus lab 
+ 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, intr);
++	
+ }
+ 
+ static void vmx_inject_nmi(struct kvm_vcpu *vcpu)
+@@ -5128,6 +5320,11 @@ static void vmx_inject_nmi(struct kvm_vcpu *vcpu)
+ 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+ 		return;
+ 	}
++	
++	//cmpe283 bonus lab	
++	incrementEventInjected(vcpu->vcpu_id);
++	//cmpe283 bonus lab 
++	
+ 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD,
+ 			INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK | NMI_VECTOR);
+ }
+@@ -8112,6 +8309,79 @@ static void dump_vmcs(void)
+ 		       vmcs_read16(VIRTUAL_PROCESSOR_ID));
+ }
+ 
++//cmpe283 bonus lab
++//static void init_assignment_variables();
++static void init_assignment_variables(void)
++{
++	int i = 0, j = 0;
++	assignment_data.module_start_time = ktime_to_ms(ktime_get())/1000;
++	assignment_data.current_time = assignment_data.module_start_time;
++
++	for(i=0; i < MAX_EXIT_INDEX;i++)
++	{
++		assignment_data.exit_names[i] = NULL;
++		for(j = 0;j < MAX_CPU_CORES;j++)
++		{
++			assignment_data.cpu_data[j].cyles_consumed_by_exit[i] = 0;
++			assignment_data.cpu_data[j].exit_count[i] = 0;	
++		}
++	}	
++	for(j = 0;j < MAX_CPU_CORES;j++)
++	{
++		assignment_data.cpu_data[j].events_injected = 0;
++	}
++	assignment_data.exit_names[EXIT_REASON_EXCEPTION_NMI] = "Non Maskable Interrupt Exception";
++	assignment_data.exit_names[EXIT_REASON_EXTERNAL_INTERRUPT] = "External Interrupt";
++	assignment_data.exit_names[EXIT_REASON_TRIPLE_FAULT] = "Triple Fault";
++	assignment_data.exit_names[EXIT_REASON_PENDING_INTERRUPT] = "Pending Interrupt";
++	assignment_data.exit_names[EXIT_REASON_NMI_WINDOW] = "NMI Window";
++	assignment_data.exit_names[EXIT_REASON_TASK_SWITCH] = "Task Switch";
++	assignment_data.exit_names[EXIT_REASON_CPUID] = "CPUID";
++	assignment_data.exit_names[EXIT_REASON_HLT] = "Halt";
++	assignment_data.exit_names[EXIT_REASON_INVLPG] = "Invalid Page(Page Fault)";
++	assignment_data.exit_names[EXIT_REASON_RDPMC] = "Read Performance Counter";
++	assignment_data.exit_names[EXIT_REASON_RDTSC] = "Read Time Stamp Counter";
++	assignment_data.exit_names[EXIT_REASON_VMCALL] = "VMCALL";
++	assignment_data.exit_names[EXIT_REASON_VMCLEAR] = "VMCLEAR";
++	assignment_data.exit_names[EXIT_REASON_VMLAUNCH] = "VMLAUNCH";
++	assignment_data.exit_names[EXIT_REASON_VMPTRLD] = "VMPTRLD";
++	assignment_data.exit_names[EXIT_REASON_VMPTRST] = "VMPTRST";
++	assignment_data.exit_names[EXIT_REASON_VMREAD] = "VMREAD";
++	assignment_data.exit_names[EXIT_REASON_VMRESUME] = "VMRESUME";
++	assignment_data.exit_names[EXIT_REASON_VMWRITE] = "VMWRITE";
++	assignment_data.exit_names[EXIT_REASON_VMOFF] = "VMOFF";
++	assignment_data.exit_names[EXIT_REASON_VMON] = "VMON";
++	assignment_data.exit_names[EXIT_REASON_CR_ACCESS] = "CR_ACCESS";
++	assignment_data.exit_names[EXIT_REASON_DR_ACCESS] = "DR_ACCESS";
++	assignment_data.exit_names[EXIT_REASON_IO_INSTRUCTION] = "IO Instruction";
++	assignment_data.exit_names[EXIT_REASON_MSR_READ] = "MSR Read";
++	assignment_data.exit_names[EXIT_REASON_MSR_WRITE] = "MSR Write";
++	assignment_data.exit_names[EXIT_REASON_MWAIT_INSTRUCTION] = "MWAIT";
++	assignment_data.exit_names[EXIT_REASON_MONITOR_TRAP_FLAG] = "MONITOR TRAP FLAG";
++	assignment_data.exit_names[EXIT_REASON_MONITOR_INSTRUCTION] = "Monitor Instruction";
++	assignment_data.exit_names[EXIT_REASON_PAUSE_INSTRUCTION] = "Pause Instruction";
++	assignment_data.exit_names[EXIT_REASON_MCE_DURING_VMENTRY] = "MCE During VMENTRY";
++	assignment_data.exit_names[EXIT_REASON_TPR_BELOW_THRESHOLD] = "TPR Below Threshold";
++	assignment_data.exit_names[EXIT_REASON_APIC_ACCESS] = "APIC Access";
++	assignment_data.exit_names[EXIT_REASON_EPT_VIOLATION] = "EPT Violation";
++	assignment_data.exit_names[EXIT_REASON_EPT_MISCONFIG] = "EPT Misconfig";
++	assignment_data.exit_names[EXIT_REASON_INVEPT] = "Invalid EPT";
++	assignment_data.exit_names[EXIT_REASON_PREEMPTION_TIMER] = "Preemption Timer";
++	assignment_data.exit_names[EXIT_REASON_WBINVD] = "WBINVD";
++	assignment_data.exit_names[EXIT_REASON_APIC_WRITE] = "APIC Write";
++	assignment_data.exit_names[EXIT_REASON_EOI_INDUCED] = "EOI Induced";
++	assignment_data.exit_names[EXIT_REASON_INVALID_STATE] = "Invalid State";
++	assignment_data.exit_names[EXIT_REASON_MSR_LOAD_FAIL] = "MSR Load Fail";
++	assignment_data.exit_names[EXIT_REASON_INVD] = "INVD";
++	assignment_data.exit_names[EXIT_REASON_INVVPID] = "INVVPID";
++	assignment_data.exit_names[EXIT_REASON_INVPCID] = "INVPCID";
++	assignment_data.exit_names[EXIT_REASON_XSAVES] = "XSAVES";
++	assignment_data.exit_names[EXIT_REASON_XRSTORS] = "XRSTORS";
++	assignment_data.exit_names[EXIT_REASON_PCOMMIT] = "PCOMMIT";
++}
++
++//cmpe283 bonus lab
++
+ /*
+  * The guest has exited.  See if we can fix it or if we need userspace
+  * assistance.
+@@ -8121,9 +8391,16 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	u32 exit_reason = vmx->exit_reason;
+ 	u32 vectoring_info = vmx->idt_vectoring_info;
+-
++	u32 ret_val = 0;		
++	//cmpe283 bonus lab
++	//incrementing the particular exit count
++	spin_lock(&sync_lock);
++	long s_cpu_cycle = rdtsc();
++	assignment_data.cpu_data[vcpu->vcpu_id].exit_count[vmx->exit_reason]++;
++	
++	//cmpe283 bonus lab
+ 	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
+-
++	
+ 	/*
+ 	 * Flush logged GPAs PML buffer, this will make dirty_bitmap more
+ 	 * updated. Another good is, in kvm_vm_ioctl_get_dirty_log, before
+@@ -8136,20 +8413,35 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 
+ 	/* If guest state is invalid, start emulating */
+ 	if (vmx->emulation_required)
+-		return handle_invalid_guest_state(vcpu);
+-
++	{
++		//cmpe283 bonus lab
++		ret_val = handle_invalid_guest_state(vcpu);
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);			
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab		
++		return ret_val;
++	}
+ 	if (is_guest_mode(vcpu) && nested_vmx_exit_handled(vcpu)) {
+ 		nested_vmx_vmexit(vcpu, exit_reason,
+ 				  vmcs_read32(VM_EXIT_INTR_INFO),
+ 				  vmcs_readl(EXIT_QUALIFICATION));
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
+ 		return 1;
+ 	}
+ 
+ 	if (exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
++		
+ 		dump_vmcs();
+ 		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
+ 		vcpu->run->fail_entry.hardware_entry_failure_reason
+ 			= exit_reason;
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
+ 		return 0;
+ 	}
+ 
+@@ -8157,6 +8449,10 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
+ 		vcpu->run->fail_entry.hardware_entry_failure_reason
+ 			= vmcs_read32(VM_INSTRUCTION_ERROR);
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
+ 		return 0;
+ 	}
+ 
+@@ -8176,6 +8472,10 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 		vcpu->run->internal.ndata = 2;
+ 		vcpu->run->internal.data[0] = vectoring_info;
+ 		vcpu->run->internal.data[1] = exit_reason;
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
+ 		return 0;
+ 	}
+ 
+@@ -8201,10 +8501,21 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
+ 
+ 	if (exit_reason < kvm_vmx_max_exit_handlers
+ 	    && kvm_vmx_exit_handlers[exit_reason])
+-		return kvm_vmx_exit_handlers[exit_reason](vcpu);
++	{
++		ret_val = kvm_vmx_exit_handlers[exit_reason](vcpu);
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
++		return ret_val;	
++	}
+ 	else {
+-		WARN_ONCE(1, "vmx: unexpected exit reason 0x%x\n", exit_reason);
++		WARN_ONCE(1, "vmx: unexpected exit reason 0x%x\n", exit_reason);		
+ 		kvm_queue_exception(vcpu, UD_VECTOR);
++		//cmpe283 bonus lab			
++		assignment_data.cpu_data[vcpu->vcpu_id].cyles_consumed_by_exit[vmx->exit_reason] += (rdtsc()-s_cpu_cycle);
++		spin_unlock(&sync_lock);		
++		//cmpe283 bonus lab
+ 		return 1;
+ 	}
+ }
+@@ -8546,7 +8857,7 @@ static void vmx_cancel_injection(struct kvm_vcpu *vcpu)
+ 				  vmcs_read32(VM_ENTRY_INTR_INFO_FIELD),
+ 				  VM_ENTRY_INSTRUCTION_LEN,
+ 				  VM_ENTRY_EXCEPTION_ERROR_CODE);
+-
++	
+ 	vmcs_write32(VM_ENTRY_INTR_INFO_FIELD, 0);
+ }
+ 
+@@ -10950,7 +11261,11 @@ static int __init vmx_init(void)
+ 	rcu_assign_pointer(crash_vmclear_loaded_vmcss,
+ 			   crash_vmclear_local_loaded_vmcss);
+ #endif
+-
++	
++	//cmpe283 bonus lab
++	init_assignment_variables();
++	assignmentprocinit();
++	//cmpe283 bonus lab
+ 	return 0;
+ }
+ 
+@@ -10961,7 +11276,14 @@ static void __exit vmx_exit(void)
+ 	synchronize_rcu();
+ #endif
+ 
++	//cmpe283 bonus lab
++	remove_proc_entry("case1",NULL);
++	remove_proc_entry("case2",NULL);
++	remove_proc_entry("case3",NULL);
++	remove_proc_entry("case4",NULL);
++	//cmpe283 bonus lab
+ 	kvm_exit();
++
+ }
+ 
+ module_init(vmx_init)
